@@ -1,0 +1,54 @@
+# VeritasAI V1 — Backend Dependencies
+# Python 3.13.x compatible.
+# Versions chosen to be compatible with each other and with other tools in
+# this environment (firebase-admin, google-adk, mcp, langchain, fastmcp, etc.)
+
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi==0.118.3
+uvicorn[standard]==0.34.0
+
+# ── Data Validation / Config ──────────────────────────────────────────────────
+pydantic==2.11.7
+pydantic-settings==2.10.1
+
+# ── HTTP Client (async) ───────────────────────────────────────────────────────
+httpx==0.28.1
+
+# ── Environment ───────────────────────────────────────────────────────────────
+python-dotenv==1.1.1
+
+# ── Deep Learning Runtime ─────────────────────────────────────────────────────
+# CPU-only wheel; swap index URL to https://download.pytorch.org/whl/cu124
+# for CUDA 12.4 GPU support.
+torch>=2.5.0
+
+# ── NLP / RoBERTa Transformer (models/transformer.py) ────────────────────────
+# Used exclusively for NLI / stance-detection classification signal.
+# Do NOT use for embeddings — that responsibility belongs to sentence-transformers.
+transformers>=4.44.0
+tokenizers>=0.19.0
+
+# ── Embeddings / RAG (app/rag/embeddings.py) ─────────────────────────────────
+# Model: sentence-transformers/all-MiniLM-L6-v2  (output dim = 384)
+# Used exclusively for semantic similarity & evidence retrieval.
+# Vector retrieval implemented with NumPy cosine similarity — no FAISS yet.
+sentence-transformers>=3.0.0
+numpy>=2.0.0
+
+# ── Web Evidence Scraping (services/web_evaluator.py) ────────────────────────
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# ────────────────────────────────────────────────────────────────────────────
+# Deferred — uncomment when the corresponding module is implemented
+# ────────────────────────────────────────────────────────────────────────────
+
+# ── NER / Tokenisation (claim_extractor.py) ──────────────────────────────────
+# spacy>=3.8.0
+# en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# ── Vector Store (vector_store.py) ───────────────────────────────────────────
+# faiss-cpu>=1.8.0      # upgrade from NumPy cosine similarity when scaling
+
+# ── Knowledge Graph (graph_engine.py) ────────────────────────────────────────
+# neo4j>=5.24.0         # official async driver
