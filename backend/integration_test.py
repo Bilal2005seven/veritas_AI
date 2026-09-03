@@ -16,6 +16,7 @@ BASE_URL = "http://127.0.0.1:8000"
 CLAIMS = [
     "The Earth revolves around the Sun.",
     "Kal Damoh ke post office ke paas do cars ka accident hua tha.",
+    "The Sun is made of solid iron.",
 ]
 
 def post_verify(claim: str):
