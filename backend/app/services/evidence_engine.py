@@ -1,17 +1,24 @@
 """
 VeritasAI V1 — Evidence Engine
 ================================
-Combines web evidence, MiniLM semantic similarity, and NLI classification
-into structured, ranked evidence analysis for a given claim.
+Combines web evidence, MiniLM semantic similarity, NLI classification,
+and passage-level hybrid retrieval into structured, ranked evidence
+analysis for a given claim.
 
 Responsibilities
 ----------------
 1. Accept a raw *claim* string and a list of :class:`~app.services.web_evaluator.WebEvidence`
    objects (already fetched by :class:`~app.services.web_evaluator.WebEvaluatorService`).
 2. For every evidence item with usable content:
-   - Compute a semantic relevance score via :class:`~app.rag.embeddings.EmbeddingService`.
-   - Run NLI classification via :class:`~app.models.transformer.TransformerService`.
-   - Combine into an :class:`EvidenceAnalysis` record.
+   a. Chunk the article text into ≈200-word passages
+      (:func:`~app.rag.chunker.chunk_text`).
+   b. Retrieve the most relevant passage(s) using hybrid BM25 + MiniLM
+      retrieval (:func:`~app.rag.hybrid_retriever.hybrid_retrieve`).
+   c. Compute a semantic relevance score for the best passage via
+      :class:`~app.rag.embeddings.EmbeddingService`.
+   d. Run NLI classification on the best passage via
+      :class:`~app.models.transformer.TransformerService`.
+   e. Combine into an :class:`EvidenceAnalysis` record.
 3. Deduplicate by URL (keep first occurrence).
 4. Skip items with empty/whitespace content and record them as SKIPPED.
 5. Rank by ``relevance_score`` descending.
@@ -22,6 +29,13 @@ Responsibilities
 
 Design decisions
 ----------------
+* **Passage-level NLI** — NLI now operates on the single best ≈200-word
+  passage selected by hybrid retrieval instead of the full (noisy) article
+  text.  This dramatically reduces false NEUTRAL/CONTRADICTION results caused
+  by off-topic boilerplate surrounding the relevant sentence.
+* **Hybrid retrieval reuses existing services** — BM25 (new: rank-bm25) and
+  MiniLM embeddings (existing EmbeddingService) are fused with RRF.  No new
+  embedding model is introduced.
 * **No final verdict** — the engine emits structured analysis only.
   The Credibility Engine makes the VERIFIED/UNVERIFIED/CONTRADICTED call.
 * **NEUTRAL ≠ SUPPORT** — a high embedding similarity with a NEUTRAL NLI
@@ -51,7 +65,9 @@ from app.models.transformer import (
     LABEL_NEUTRAL,
     TransformerService,
 )
+from app.rag.chunker import chunk_text
 from app.rag.embeddings import EmbeddingService
+from app.rag.hybrid_retriever import hybrid_retrieve
 from app.services.web_evaluator import WebEvidence
 
 logger = logging.getLogger(__name__)
@@ -74,6 +90,10 @@ DEFAULT_MAX_NLI_ITEMS: int = 20
 
 #: Maximum number of items to return in the final result.
 DEFAULT_TOP_K: int = 10
+
+#: How many top passages to retrieve per article via hybrid retrieval.
+#: NLI then runs on the single best-ranked passage from this set.
+DEFAULT_HYBRID_TOP_K: int = 7
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +148,9 @@ class EvidenceAnalysis:
     published_at: Optional[str] = None
     fetch_error: Optional[str] = None
     nli_error: Optional[str] = None
+    #: Number of passages the source article was split into during hybrid
+    #: retrieval.  1 means the article was short enough to use as-is.
+    passage_count: int = 1
 
     @property
     def snippet(self) -> str:
@@ -216,12 +239,14 @@ class EvidenceEngine:
         min_relevance: float = DEFAULT_MIN_RELEVANCE,
         max_nli_items: int = DEFAULT_MAX_NLI_ITEMS,
         top_k: int = DEFAULT_TOP_K,
+        hybrid_top_k: int = DEFAULT_HYBRID_TOP_K,
     ) -> None:
         self._embedder = embedding_service
         self._nli = transformer_service
         self._min_relevance = min_relevance
         self._max_nli_items = max_nli_items
         self._top_k = top_k
+        self._hybrid_top_k = hybrid_top_k
 
     # ------------------------------------------------------------------
     # Public API
@@ -406,52 +431,130 @@ class EvidenceEngine:
         relevance: float,
     ) -> EvidenceAnalysis:
         """
-        Run NLI on a single (claim, evidence) pair, handling errors gracefully.
+        Run NLI on the best passage extracted from *ev* for *claim*.
 
-        If NLI raises (model not loaded, content too short, etc.) the item is
-        kept with label NEUTRAL, score 0, and the error recorded.
+        Steps
+        -----
+        1. Chunk the article text into ≈200-word passages.
+        2. If the article has multiple chunks, run hybrid BM25 + MiniLM
+           retrieval to select the single most relevant passage.
+        3. Recompute the relevance score for that passage (replaces the
+           whole-article score used during the initial sort).
+        4. Apply the relevance threshold gate.
+        5. Pass the best passage as the NLI premise; claim as hypothesis.
+
+        If any step raises, errors are captured and the item is returned
+        with label NEUTRAL and the error recorded — same as before.
         """
         content = ev.content.strip()
 
-        if relevance < self._min_relevance:
+        # ------------------------------------------------------------------
+        # Step 1: chunk the article.
+        # ------------------------------------------------------------------
+        chunks = chunk_text(content)
+        passage_count = len(chunks)
+
+        # ------------------------------------------------------------------
+        # Step 2: select best passage via hybrid retrieval.
+        # ------------------------------------------------------------------
+        best_passage = content  # fallback: use full content
+        best_relevance = relevance  # fallback: keep original score
+
+        if passage_count > 1:
+            try:
+                ranked = hybrid_retrieve(
+                    claim=claim,
+                    chunks=chunks,
+                    embedding_service=self._embedder,
+                    top_k=self._hybrid_top_k,
+                )
+                if ranked:
+                    best_idx, _ = ranked[0]
+                    best_passage = chunks[best_idx]
+                    # Recompute relevance for the selected passage so that the
+                    # score reflects what NLI actually received.
+                    import numpy as np
+                    claim_vec = self._embedder.encode_text(claim)
+                    passage_vec = self._embedder.encode_text(best_passage)
+                    sim = float(
+                        self._embedder.similarity(
+                            claim_vec, passage_vec.reshape(1, -1)
+                        )[0]
+                    )
+                    best_relevance = max(0.0, sim)
+                    logger.debug(
+                        "Hybrid retrieval: %d chunks → best passage idx=%d "
+                        "relevance=%.3f (was %.3f) for %s",
+                        passage_count, best_idx, best_relevance, relevance, ev.url,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Hybrid retrieval failed for %s (%s) — using full content.",
+                    ev.url, exc,
+                )
+                # best_passage and best_relevance already set to fallback values.
+        else:
+            # Article was short enough to be a single chunk; use it directly.
+            best_passage = chunks[0] if chunks else content
+
+        # ------------------------------------------------------------------
+        # Step 3: relevance threshold gate (unchanged logic, new score).
+        # ------------------------------------------------------------------
+        if best_relevance < self._min_relevance:
             logger.debug(
                 "Skipping NLI for %s (relevance=%.3f < threshold=%.3f)",
                 ev.url,
-                relevance,
+                best_relevance,
                 self._min_relevance,
             )
             return EvidenceAnalysis(
                 title=ev.title,
                 url=ev.url,
                 source_name=ev.source_name,
-                content=ev.content,
+                content=best_passage,
                 published_at=ev.published_at,
                 fetch_error=ev.error,
-                relevance_score=round(relevance, 6),
+                relevance_score=round(best_relevance, 6),
                 nli_label=LABEL_NEUTRAL,
                 entailment_score=0.0,
                 contradiction_score=0.0,
                 neutral_score=0.0,
                 nli_error="Below relevance threshold — NLI skipped.",
+                passage_count=passage_count,
             )
+
+        # ------------------------------------------------------------------
+        # Step 4: NLI on the best passage.
+        # Premise = passage (evidence), Hypothesis = claim — ordering preserved.
+        #
+        # Prepend the article title to the passage so the NLI model benefits
+        # from the headline context even when the selected chunk is indirect.
+        # Falls back to best_passage alone when the title is absent.
+        # ------------------------------------------------------------------
+        article_title = ev.title.strip() if ev.title else ""
+        if article_title:
+            evidence_for_nli = f"{article_title}\n{best_passage}"
+        else:
+            evidence_for_nli = best_passage
 
         try:
             nli_result: TransformerResult = self._nli.analyze(
                 claim=claim,
-                evidence=content,
+                evidence=evidence_for_nli,
             )
             return EvidenceAnalysis(
                 title=ev.title,
                 url=ev.url,
                 source_name=ev.source_name,
-                content=ev.content,
+                content=best_passage,
                 published_at=ev.published_at,
                 fetch_error=ev.error,
-                relevance_score=round(relevance, 6),
+                relevance_score=round(best_relevance, 6),
                 nli_label=nli_result.label,
                 entailment_score=nli_result.entailment_score,
                 contradiction_score=nli_result.contradiction_score,
                 neutral_score=nli_result.neutral_score,
+                passage_count=passage_count,
             )
         except Exception as exc:
             logger.warning("NLI error for %s: %s", ev.url, exc)
@@ -459,15 +562,16 @@ class EvidenceEngine:
                 title=ev.title,
                 url=ev.url,
                 source_name=ev.source_name,
-                content=ev.content,
+                content=best_passage,
                 published_at=ev.published_at,
                 fetch_error=ev.error,
-                relevance_score=round(relevance, 6),
+                relevance_score=round(best_relevance, 6),
                 nli_label=LABEL_NEUTRAL,
                 entailment_score=0.0,
                 contradiction_score=0.0,
                 neutral_score=0.0,
                 nli_error=str(exc),
+                passage_count=passage_count,
             )
 
     @staticmethod
@@ -490,4 +594,5 @@ class EvidenceEngine:
             contradiction_score=0.0,
             neutral_score=0.0,
             nli_error=reason,
+            passage_count=1,
         )

@@ -298,9 +298,12 @@ class TransformerService:
         self._load()
 
         # Tokenize as a sentence-pair sequence.
+        # NLI convention: text_a = Premise (evidence), text_b = Hypothesis (claim).
+        # Swapped from (claim, evidence) to (evidence, claim) so that the model
+        # correctly evaluates whether the evidence entails / contradicts the claim.
         inputs = self._tokenizer(  # type: ignore[operator]
-            claim,
             evidence,
+            claim,
             return_tensors="pt",
             truncation=True,
             max_length=MAX_LENGTH,

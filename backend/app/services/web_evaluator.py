@@ -221,6 +221,10 @@ def _clean_text(soup: BeautifulSoup) -> str:
     text = soup.get_text(separator=" ", strip=True)
     # Collapse runs of whitespace.
     text = re.sub(r"\s{2,}", " ", text).strip()
+    # Strip zero-width Unicode characters (U+200B ZWSP, U+200C ZWNJ, U+200D ZWJ,
+    # U+FEFF BOM/ZWNBSP) used by some sites as layout spacers.  These are invisible
+    # to readers but waste NLI token budget and introduce noise.
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text).strip()
     return text[:MAX_CONTENT_CHARS]
 
 
