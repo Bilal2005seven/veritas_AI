@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # ── Web Search ───────────────────────────────────────────────────────────
     SERPER_API_KEY: str = ""
-    WEB_SEARCH_MAX_RESULTS: int = 10
+    WEB_SEARCH_MAX_RESULTS: int = 5
 
     # ── Knowledge Graph ──────────────────────────────────────────────────────
     # TODO: Add Neo4j / graph-db credentials when graph_engine is implemented.

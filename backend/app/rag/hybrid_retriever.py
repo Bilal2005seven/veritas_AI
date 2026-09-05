@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 RRF_K: int = 60
 
 #: Default number of top passages to return.
-DEFAULT_TOP_K: int = 7
+DEFAULT_TOP_K: int = 3
 
 
 # ---------------------------------------------------------------------------
