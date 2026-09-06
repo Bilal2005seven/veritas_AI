@@ -3,10 +3,13 @@ VeritasAI V1 — API Routes
 """
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
+from app.models.gemini_schemas import GeminiVerifyResponse
 from app.models.schemas import VerifyRequest, VerifyResponse, VerificationStatus
+from app.services.gemini_verification_service import gemini_verification_service
 from app.services.pipeline import get_pipeline
 
 logger = logging.getLogger(__name__)
@@ -67,3 +70,32 @@ async def verify_claim(request: VerifyRequest) -> VerifyResponse:
         )
 
     return result
+
+
+@router.post(
+    "/gemini-verify",
+    response_model=GeminiVerifyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify a claim, URL, or image using Gemini 3.7 Flash",
+    tags=["Gemini Verification"],
+)
+async def gemini_verify(
+    claim: Optional[str] = Form(None, description="Optional text claim to verify."),
+    url: Optional[str] = Form(None, description="Optional public article/news URL."),
+    image: Optional[UploadFile] = File(None, description="Optional news screenshot/image."),
+) -> GeminiVerifyResponse:
+    """
+    Independent verification endpoint powered exclusively by Gemini 3.7 Flash and Google Search grounding.
+    Accepts:
+      - Claim only
+      - URL only
+      - Image only
+      - Claim + URL
+      - Claim + Image
+      - Claim + URL + Image
+    """
+    return await gemini_verification_service.verify(
+        claim=claim,
+        url=url,
+        image=image,
+    )

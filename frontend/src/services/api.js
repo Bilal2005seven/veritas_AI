@@ -59,6 +59,72 @@ export async function verifyClaim(claim, signal) {
 }
 
 /**
+ * Verify a claim, article URL, or screenshot using Gemini 3.7 Flash.
+ *
+ * @param {Object} params
+ * @param {string} [params.claim] Optional text claim.
+ * @param {string} [params.url] Optional public news URL.
+ * @param {File} [params.image] Optional image/screenshot File.
+ * @param {AbortSignal} [signal] Optional cancellation signal.
+ * @returns {Promise<any>}
+ */
+export async function verifyWithGemini({ claim, url, image }, signal) {
+  if (!claim && !url && !image) {
+    throw new Error('Please provide at least a claim, news URL, or screenshot to verify.');
+  }
+
+  const formData = new FormData();
+  if (claim && claim.trim()) {
+    formData.append('claim', claim.trim());
+  }
+  if (url && url.trim()) {
+    formData.append('url', url.trim());
+  }
+  if (image) {
+    formData.append('image', image);
+  }
+
+  const endpoint = `${BASE_URL}/api/v1/gemini-verify`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        // Do NOT manually set Content-Type so browser sets boundary automatically
+      },
+      body: formData,
+      signal,
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      const detail = errData.detail || `Server returned status ${response.status}`;
+      throw new Error(typeof detail === 'string' ? detail : 'Gemini verification failed.');
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('The verification request was cancelled.');
+    }
+
+    if (
+      err.message.includes('Failed to fetch') ||
+      err.message.includes('NetworkError') ||
+      err.message.includes('Load failed')
+    ) {
+      throw new Error(
+        'Unable to connect to the verification engine. Ensure the FastAPI backend is running.'
+      );
+    }
+
+    throw err;
+  }
+}
+
+/**
  * Probe the backend liveness endpoint.
  *
  * @returns {Promise<{ status: string, version: string }>}

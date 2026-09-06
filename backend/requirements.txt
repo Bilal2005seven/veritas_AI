@@ -40,6 +40,10 @@ rank-bm25>=0.2.2
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
+# ── Gemini Verification Service (services/gemini_verification_service.py) ─────
+google-genai>=1.0.0
+python-multipart>=0.0.9
+
 # ────────────────────────────────────────────────────────────────────────────
 # Deferred — uncomment when the corresponding module is implemented
 # ────────────────────────────────────────────────────────────────────────────
