@@ -220,7 +220,7 @@ class GeminiVerificationService:
                         temperature=0.2,
                     )
                     search_fallback = self._client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-3.7-flash",
                         contents=contents,
                         config=fallback_config,
                     )

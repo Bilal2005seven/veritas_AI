@@ -65,7 +65,7 @@ class GeminiService:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3.7-flash",
         timeout: float = 15.0,
     ) -> None:
         self._api_key = api_key.strip()
